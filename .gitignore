@@ -1,2 +1,3 @@
 data/
 .env
+test_celery/__pycache__/
