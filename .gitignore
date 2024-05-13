@@ -1,3 +1,4 @@
 data/
+img_convert/
 .env
 test_celery/__pycache__/
