@@ -1,0 +1,24 @@
+# Requirements Minimal - Test QR Congo
+
+# Core QR generation (essentiel)
+qrcode[pil]==7.4.2
+Pillow==10.1.0
+
+# Backend simple
+fastapi==0.104.1
+uvicorn==0.24.0
+
+# Database & Cache (versions compatibles)
+redis==4.6.0
+celery==5.3.4
+
+# Database simple
+sqlalchemy==2.0.23
+
+# Security minimal
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Utils
+python-dateutil==2.8.2
+pydantic==2.5.0

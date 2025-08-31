@@ -1,0 +1,52 @@
+# Requirements Production - QR Congo (Versions compatibles)
+
+# Core QR generation
+qrcode[pil]==7.4.2
+Pillow==10.1.0
+
+# Performance & Parallelism  
+numpy==1.24.3
+
+# Backend Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+
+# Database & Cache (versions compatibles)
+redis==4.6.0  # Compatible avec celery[redis] 5.3.4
+celery[redis]==5.3.4  # Exige redis<5.0.0
+kombu==5.3.4
+
+# Database ORM
+sqlalchemy==2.0.23
+alembic==1.13.1
+psycopg2-binary==2.9.9
+
+# System monitoring
+psutil==5.9.6
+
+# Security
+cryptography==41.0.8
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.6
+
+# HTTP Client
+httpx==0.25.2
+aiofiles==23.2.1
+
+# JSON/Data
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Logging & Monitoring
+structlog==23.2.0
+prometheus-client==0.19.0
+
+# Testing (optionnel)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Utils
+python-dateutil==2.8.2
+pytz==2023.3

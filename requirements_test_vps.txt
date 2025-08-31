@@ -1,0 +1,8 @@
+# Requirements pour test VPS simple - QR Congo
+
+# Core QR generation uniquement
+qrcode[pil]==7.4.2
+Pillow==10.1.0
+
+# Optionnel pour performance
+psutil==5.9.6
