@@ -1,0 +1,624 @@
+# Kubernetes Deployment - Plateforme QR Congo
+# Configuration pour production 100M+ QR codes/jour
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: qr-platform
+  labels:
+    name: qr-platform
+    environment: production
+
+---
+# ConfigMap pour configuration commune
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qr-platform-config
+  namespace: qr-platform
+data:
+  DATABASE_URL: "postgresql://qr_admin:secure_password@postgres-service:5432/qr_platform"
+  REDIS_URL: "redis://redis-service:6379/0"
+  CELERY_BROKER_URL: "redis://redis-service:6379/2"
+  MINIO_URL: "http://minio-service:9000"
+  LOG_LEVEL: "INFO"
+  QR_BATCH_SIZE: "10000"
+  MAX_QR_PER_ORDER: "1000000"
+
+---
+# Secret pour mots de passe
+apiVersion: v1
+kind: Secret
+metadata:
+  name: qr-platform-secrets
+  namespace: qr-platform
+type: Opaque
+data:
+  postgres-password: c2VjdXJlX3Bhc3N3b3JkXzEyMw==  # secure_password_123
+  jwt-secret: Y29uZ29fc2VjcmV0X2tleV8yMDI0  # congo_secret_key_2024
+  minio-access-key: YWRtaW4=  # admin
+  minio-secret-key: cGFzc3dvcmQxMjM=  # password123
+
+---
+# PostgreSQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: qr-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        env:
+        - name: POSTGRES_DB
+          value: qr_platform
+        - name: POSTGRES_USER
+          value: qr_admin
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: qr-platform-secrets
+              key: postgres-password
+        ports:
+        - containerPort: 5432
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: qr-platform
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+  type: ClusterIP
+
+---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: qr-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: qr-platform
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+  type: ClusterIP
+
+---
+# QR Generation Service Deployment (CPU Intensive)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qr-generation-service
+  namespace: qr-platform
+spec:
+  replicas: 8  # 8 instances pour performance
+  selector:
+    matchLabels:
+      app: qr-generation-service
+  template:
+    metadata:
+      labels:
+        app: qr-generation-service
+    spec:
+      containers:
+      - name: qr-generation
+        image: qr-platform/qr-generation:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: REDIS_URL
+        - name: CELERY_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: CELERY_BROKER_URL
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "2000m"  # 2 CPU cores minimum
+          limits:
+            memory: "4Gi"
+            cpu: "4000m"  # 4 CPU cores max
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# QR Generation Service (Service)
+apiVersion: v1
+kind: Service
+metadata:
+  name: qr-generation-service
+  namespace: qr-platform
+spec:
+  selector:
+    app: qr-generation-service
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+
+---
+# Celery Workers Deployment (Highly Scalable)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-workers
+  namespace: qr-platform
+spec:
+  replicas: 15  # 15 workers pour parallélisation massive
+  selector:
+    matchLabels:
+      app: celery-workers
+  template:
+    metadata:
+      labels:
+        app: celery-workers
+    spec:
+      containers:
+      - name: celery-worker
+        image: qr-platform/celery-worker:latest
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: DATABASE_URL
+        - name: CELERY_BROKER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: CELERY_BROKER_URL
+        - name: CELERY_RESULT_BACKEND
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: CELERY_BROKER_URL
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "3Gi"
+            cpu: "3000m"
+        command: ["celery", "worker", "-A", "qr_tasks", "--loglevel=info", "--concurrency=4"]
+
+---
+# Verification Service (Public Facing - High Availability)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verification-service
+  namespace: qr-platform
+spec:
+  replicas: 12  # 12 instances pour trafic public élevé
+  selector:
+    matchLabels:
+      app: verification-service
+  template:
+    metadata:
+      labels:
+        app: verification-service
+    spec:
+      containers:
+      - name: verification
+        image: qr-platform/verification:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: REDIS_URL
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+
+---
+# Verification Service (Service)
+apiVersion: v1
+kind: Service
+metadata:
+  name: verification-service
+  namespace: qr-platform
+spec:
+  selector:
+    app: verification-service
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+
+---
+# Order Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: qr-platform
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+      - name: order-service
+        image: qr-platform/order-service:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: qr-platform-config
+              key: REDIS_URL
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+
+---
+# Order Service (Service)
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: qr-platform
+spec:
+  selector:
+    app: order-service
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+
+---
+# MinIO Deployment (Object Storage)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: qr-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        ports:
+        - containerPort: 9000
+        - containerPort: 9001
+        env:
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: qr-platform-secrets
+              key: minio-access-key
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: qr-platform-secrets
+              key: minio-secret-key
+        command: ["minio", "server", "/data", "--console-address", ":9001"]
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: minio-storage
+          mountPath: /data
+      volumes:
+      - name: minio-storage
+        persistentVolumeClaim:
+          claimName: minio-pvc
+
+---
+# MinIO Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-service
+  namespace: qr-platform
+spec:
+  selector:
+    app: minio
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+  type: ClusterIP
+
+---
+# API Gateway (Nginx Ingress)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qr-platform-ingress
+  namespace: qr-platform
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/rate-limit: "1000"  # 1000 req/min
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - api.qr.gouv.cg
+    secretName: qr-platform-tls
+  rules:
+  - host: api.qr.gouv.cg
+    http:
+      paths:
+      - path: /verify
+        pathType: Prefix
+        backend:
+          service:
+            name: verification-service
+            port:
+              number: 8000
+      - path: /orders
+        pathType: Prefix
+        backend:
+          service:
+            name: order-service
+            port:
+              number: 8000
+      - path: /qr-generation
+        pathType: Prefix
+        backend:
+          service:
+            name: qr-generation-service
+            port:
+              number: 8000
+
+---
+# Horizontal Pod Autoscaler pour QR Generation
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: qr-generation-hpa
+  namespace: qr-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: qr-generation-service
+  minReplicas: 5
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# HPA pour Verification Service
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: verification-hpa
+  namespace: qr-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: verification-service
+  minReplicas: 8
+  maxReplicas: 25
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+
+---
+# HPA pour Celery Workers
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: celery-workers-hpa
+  namespace: qr-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: celery-workers
+  minReplicas: 10
+  maxReplicas: 50  # Jusqu'à 50 workers si nécessaire
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+
+---
+# Persistent Volume Claims
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: qr-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi  # 500GB pour base de données
+  storageClassName: fast-ssd
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+  namespace: qr-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Ti  # 2TB pour stockage objets
+  storageClassName: standard
+
+---
+# Network Policy pour sécurité
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: qr-platform-network-policy
+  namespace: qr-platform
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: qr-platform
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: qr-platform
+  - to: []  # Allow external egress

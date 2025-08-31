@@ -1,0 +1,238 @@
+version: '3.8'
+
+services:
+  # Base de données PostgreSQL (cluster simulé)
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: qr_platform
+      POSTGRES_USER: qr_admin
+      POSTGRES_PASSWORD: secure_password_123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - qr_network
+
+  # Redis pour cache et Celery
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - qr_network
+
+  # Service de certification OCC
+  certification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.certification
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://qr_admin:secure_password_123@postgres:5432/qr_platform
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - qr_network
+
+  # Service de commandes
+  order-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.order
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql://qr_admin:secure_password_123@postgres:5432/qr_platform
+      - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/2
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - qr_network
+
+  # Service génération QR (scalable)
+  qr-generation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.qr_generation
+    ports:
+      - "8003:8000"
+    environment:
+      - DATABASE_URL=postgresql://qr_admin:secure_password_123@postgres:5432/qr_platform
+      - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/2
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - qr_network
+    deploy:
+      replicas: 3  # 3 instances pour performance
+
+  # Workers Celery pour génération parallèle
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.celery_worker
+    environment:
+      - DATABASE_URL=postgresql://qr_admin:secure_password_123@postgres:5432/qr_platform
+      - CELERY_BROKER_URL=redis://redis:6379/2
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - qr_network
+    deploy:
+      replicas: 5  # 5 workers pour parallélisation
+
+  # Service de vérification (public)
+  verification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.verification
+    ports:
+      - "8004:8000"
+    environment:
+      - DATABASE_URL=postgresql://qr_admin:secure_password_123@postgres:5432/qr_platform
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - qr_network
+    deploy:
+      replicas: 4  # 4 instances pour trafic public
+
+  # Service de distribution
+  distribution-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.distribution
+    ports:
+      - "8005:8000"
+    environment:
+      - DATABASE_URL=postgresql://qr_admin:secure_password_123@postgres:5432/qr_platform
+      - REDIS_URL=redis://redis:6379/1
+      - MINIO_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password123
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - qr_network
+
+  # Stockage objet MinIO (simulation S3)
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - qr_network
+
+  # Portail web React
+  portal-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.portal
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_BASE_URL=http://localhost:8000
+    networks:
+      - qr_network
+
+  # API Gateway Nginx
+  api-gateway:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - certification-service
+      - order-service
+      - qr-generation-service
+      - verification-service
+      - distribution-service
+    networks:
+      - qr_network
+
+  # Monitoring Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - qr_network
+
+  # Monitoring Grafana
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - qr_network
+
+  # Elasticsearch pour logs
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - qr_network
+
+  # Kibana pour visualisation logs
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.8.0
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - qr_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  elasticsearch_data:
+
+networks:
+  qr_network:
+    driver: bridge
