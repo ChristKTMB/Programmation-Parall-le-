@@ -10,7 +10,7 @@ concurrent-futures==3.1.1
 
 # Database & Storage
 sqlite3  # Built-in Python
-redis==5.0.1
+redis==4.6.0
 pymongo==4.6.0  # Alternative NoSQL
 sqlalchemy==2.0.23  # ORM avancé
 
@@ -23,7 +23,7 @@ uvicorn==0.24.0
 gunicorn==21.2.0
 
 # Message Queue
-celery==5.3.4
+celery[redis]==5.3.4
 rabbitmq==0.2.0
 kombu==5.3.4
 
