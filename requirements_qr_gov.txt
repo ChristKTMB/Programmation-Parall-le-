@@ -24,6 +24,7 @@ gunicorn==21.2.0
 
 # Message Queue
 celery==5.5.2
+flower==2.0.1
 rabbitmq==0.2.0
 kombu==5.3.4
 

@@ -1,0 +1,34 @@
+# Requirements avec Flower ajouté pour monitoring
+
+# Core QR generation
+qrcode[pil]==7.4.2
+Pillow==10.1.0
+
+# Performance & Parallelism  
+numpy==1.24.3
+
+# Database & Storage
+redis==5.2.1
+pymongo==4.6.0
+sqlalchemy==2.0.23
+
+# System monitoring
+psutil==5.9.6
+
+# Web framework (API)
+fastapi==0.104.1
+uvicorn==0.24.0
+gunicorn==21.2.0
+
+# Message Queue avec Flower
+celery==5.5.2
+flower==2.0.1  # ✅ AJOUTÉ pour monitoring
+kombu==5.3.4
+
+# Security
+cryptography==41.0.8
+passlib==1.7.4
+python-jose==3.3.0
+
+# Pydantic compatible
+pydantic==2.5.0  # ✅ Version qui supporte pattern=
